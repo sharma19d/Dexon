@@ -16,7 +16,11 @@ class ManifestDeepParser(
     private val trackerScanner: TrackerScanner
 ) {
 
-    fun buildDetailedReport(summary: AppAuditSummary): AppDetailedReport {
+    /**
+     * Phase 1: everything PackageManager already knows. Takes milliseconds, so the detail
+     * screen can render immediately while [completeReport] decodes the APK.
+     */
+    fun buildQuickReport(summary: AppAuditSummary, knownFramework: TechFramework?): AppDetailedReport {
         val pm = context.packageManager
         val flags = PackageManager.GET_PERMISSIONS or
                 PackageManager.GET_ACTIVITIES or
@@ -27,9 +31,6 @@ class ManifestDeepParser(
         @Suppress("DEPRECATION")
         val pkgInfo = pm.getPackageInfo(summary.packageName, flags)
         val appInfo = requireNotNull(pkgInfo.applicationInfo) { "No ApplicationInfo for ${summary.packageName}" }
-
-        val zipScan = TechStackDetector.scanApkZip(summary.apkPath)
-        val trackers = trackerScanner.detectTrackers(pkgInfo)
 
         val components = mutableListOf<ComponentItem>()
         pkgInfo.activities?.forEach {
@@ -55,6 +56,33 @@ class ManifestDeepParser(
             )
         }
 
+        val dangerousPerms = pkgInfo.requestedPermissions
+            ?.filter { it in PackageScanner.HIGH_RISK_PERMISSIONS }
+            .orEmpty()
+
+        return AppDetailedReport(
+            summary = knownFramework?.let { summary.copy(techFramework = it) } ?: summary,
+            minSdk = appInfo.minSdkVersion,
+            targetSdk = appInfo.targetSdkVersion,
+            isDebuggable = (appInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0,
+            allowBackup = (appInfo.flags and ApplicationInfo.FLAG_ALLOW_BACKUP) != 0,
+            usesCleartextTraffic = (appInfo.flags and ApplicationInfo.FLAG_USES_CLEARTEXT_TRAFFIC) != 0,
+            signingSchemeSummary = "",
+            dangerousPermissions = dangerousPerms,
+            detectedTrackers = trackerScanner.detectTrackers(pkgInfo),
+            nativeLibraries = emptyList(),
+            components = components,
+            deepLinks = emptyList(),
+            rawManifestXml = "",
+            isDeepScanComplete = false
+        )
+    }
+
+    /** Phase 2: zip scan, binary manifest decode, deep links and signing certificate. Can take seconds. */
+    fun completeReport(quick: AppDetailedReport): AppDetailedReport {
+        val summary = quick.summary
+        val zipScan = TechStackDetector.scanApkZip(summary.apkPath)
+
         var rawXml = ""
         var signingSummary = "Signature details unavailable"
         runCatching {
@@ -78,25 +106,13 @@ class ManifestDeepParser(
             }
         }
 
-        val deepLinks = extractDeepLinksFromXml(rawXml, summary.packageName)
-        val dangerousPerms = pkgInfo.requestedPermissions
-            ?.filter { it in PackageScanner.HIGH_RISK_PERMISSIONS }
-            .orEmpty()
-
-        return AppDetailedReport(
+        return quick.copy(
             summary = summary.copy(techFramework = zipScan.framework),
-            minSdk = appInfo.minSdkVersion,
-            targetSdk = appInfo.targetSdkVersion,
-            isDebuggable = (appInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0,
-            allowBackup = (appInfo.flags and ApplicationInfo.FLAG_ALLOW_BACKUP) != 0,
-            usesCleartextTraffic = (appInfo.flags and ApplicationInfo.FLAG_USES_CLEARTEXT_TRAFFIC) != 0,
             signingSchemeSummary = signingSummary,
-            dangerousPermissions = dangerousPerms,
-            detectedTrackers = trackers,
             nativeLibraries = zipScan.nativeLibs,
-            components = components,
-            deepLinks = deepLinks,
-            rawManifestXml = rawXml
+            deepLinks = extractDeepLinksFromXml(rawXml, summary.packageName),
+            rawManifestXml = rawXml,
+            isDeepScanComplete = true
         )
     }
 

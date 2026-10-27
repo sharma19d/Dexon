@@ -34,6 +34,9 @@ import com.charon.dexon.data.model.AppAuditSummary
 import com.charon.dexon.data.model.PrivacyGrade
 import com.charon.dexon.data.model.TechFramework
 import com.charon.dexon.ui.AppFilter
+import com.charon.dexon.ui.components.DelayedVisibility
+import com.charon.dexon.ui.components.SkeletonAppList
+import com.charon.dexon.ui.components.shimmer
 import com.charon.dexon.ui.theme.RiskColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -100,9 +103,7 @@ fun HomeScreen(
             }
 
             when {
-                isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
+                isLoading -> DelayedVisibility { SkeletonAppList() }
                 apps.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("No apps match this filter.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -110,14 +111,14 @@ fun HomeScreen(
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    item {
+                    item(contentType = "count") {
                         Text(
                             "${apps.size} apps",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    items(apps, key = { it.packageName }) { app ->
+                    items(apps, key = { it.packageName }, contentType = { "app" }) { app ->
                         AppCard(app, onClick = { onAppClick(app) })
                     }
                 }
@@ -156,8 +157,12 @@ private fun AppCard(app: AppAuditSummary, onClick: () -> Unit) {
 
 @Composable
 fun TechBadge(framework: TechFramework) {
-    val text = if (framework == TechFramework.UNKNOWN) "Scanning…" else framework.label
-    SmallBadge(text, MaterialTheme.colorScheme.primary)
+    if (framework == TechFramework.UNKNOWN) {
+        // Background zip scan still running for this app
+        Box(Modifier.size(width = 64.dp, height = 18.dp).shimmer())
+    } else {
+        SmallBadge(framework.label, MaterialTheme.colorScheme.primary)
+    }
 }
 
 @Composable

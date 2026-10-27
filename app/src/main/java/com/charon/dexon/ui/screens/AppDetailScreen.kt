@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -34,7 +35,7 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -56,6 +57,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -80,6 +82,10 @@ import com.charon.dexon.data.model.PrivacyGrade
 import com.charon.dexon.ui.DetailState
 import com.charon.dexon.ui.MainViewModel
 import com.charon.dexon.ui.TesterTarget
+import com.charon.dexon.ui.components.DelayedVisibility
+import com.charon.dexon.ui.components.SkeletonBlock
+import com.charon.dexon.ui.components.SkeletonCard
+import com.charon.dexon.ui.components.SkeletonDetail
 import com.charon.dexon.ui.theme.RiskColors
 import kotlinx.coroutines.launch
 
@@ -142,8 +148,8 @@ fun AppDetailScreen(
 
         when (state) {
             is DetailState.Idle, is DetailState.Loading -> {
-                Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
+                Box(Modifier.fillMaxSize().padding(padding)) {
+                    DelayedVisibility { SkeletonDetail() }
                 }
             }
 
@@ -297,7 +303,9 @@ private fun OverviewTab(
         }
 
         // Native libraries
-        if (report.nativeLibraries.isNotEmpty()) {
+        if (!report.isDeepScanComplete) {
+            item(key = "native_pending") { DelayedVisibility { SkeletonCard(lines = 2) } }
+        } else if (report.nativeLibraries.isNotEmpty()) {
             item {
                 ExpandableCard("Native Libraries (${report.nativeLibraries.size})") {
                     report.nativeLibraries.forEach { lib ->
@@ -383,6 +391,10 @@ private fun OverviewTab(
 @Composable
 private fun DeepAuditTab(report: AppDetailedReport, onComponentTap: (TesterTarget) -> Unit) {
     val clipboard = LocalClipboardManager.current
+    val expanded = remember(report.summary.packageName) { mutableStateMapOf<String, Boolean>() }
+    val manifestLines = remember(report.rawManifestXml) {
+        if (report.rawManifestXml.isEmpty()) emptyList() else report.rawManifestXml.lines()
+    }
 
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
@@ -399,11 +411,15 @@ private fun DeepAuditTab(report: AppDetailedReport, onComponentTap: (TesterTarge
                     Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(14.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.width(6.dp))
-                    Text(
-                        report.signingSchemeSummary,
-                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    if (report.isDeepScanComplete) {
+                        Text(
+                            report.signingSchemeSummary,
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        SkeletonBlock(width = 220.dp, height = 12.dp)
+                    }
                 }
             }
         }
@@ -430,7 +446,7 @@ private fun DeepAuditTab(report: AppDetailedReport, onComponentTap: (TesterTarge
             }
         }
 
-        // Component groups
+        // Component groups: header item + one lazy item per row, so only visible rows are composed
         val grouped = report.components.groupBy { it.type }
         listOf(
             ComponentType.ACTIVITY to "Activities",
@@ -439,11 +455,13 @@ private fun DeepAuditTab(report: AppDetailedReport, onComponentTap: (TesterTarge
             ComponentType.PROVIDER to "Content Providers",
         ).forEach { (type, label) ->
             val list = grouped[type] ?: return@forEach
-            item(key = label) {
-                ComponentGroup(
-                    title = "$label (${list.size})",
-                    components = list,
-                    onTap = { item ->
+            val open = expanded[label] == true
+            item(key = "h_$label", contentType = "header") {
+                SectionHeader("$label (${list.size})", open) { expanded[label] = !open }
+            }
+            if (open) {
+                items(list, key = { "c_${type}_${it.name}" }, contentType = { "component" }) { item ->
+                    ComponentRow(item) {
                         onComponentTap(
                             TesterTarget(
                                 packageName = report.summary.packageName,
@@ -452,47 +470,73 @@ private fun DeepAuditTab(report: AppDetailedReport, onComponentTap: (TesterTarge
                                 providerAuthority = item.authority,
                             )
                         )
-                    },
-                )
+                    }
+                }
             }
+        }
+
+        if (!report.isDeepScanComplete) {
+            // Deep links and raw XML come from decoding the APK, which is still running
+            item(key = "deep_pending") {
+                DelayedVisibility {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        SkeletonCard(lines = 3)
+                        SkeletonCard(lines = 2)
+                    }
+                }
+            }
+            return@LazyColumn
         }
 
         // Deep links
         if (report.deepLinks.isNotEmpty()) {
-            item {
-                DeepLinkGroup(
-                    deepLinks = report.deepLinks,
-                    packageName = report.summary.packageName,
-                    onTap = { link ->
+            val key = "deeplinks"
+            val open = expanded[key] == true
+            item(key = "h_$key", contentType = "header") {
+                SectionHeader("Deep Links / URI Schemes (${report.deepLinks.size})", open) { expanded[key] = !open }
+            }
+            if (open) {
+                itemsIndexed(report.deepLinks, key = { i, _ -> "dl_$i" }, contentType = { _, _ -> "deeplink" }) { _, link ->
+                    DeepLinkRow(link) {
                         onComponentTap(
                             TesterTarget(
                                 packageName = report.summary.packageName,
                                 componentName = link.activityName,
                                 type = ComponentType.ACTIVITY,
+                                presetAction = "android.intent.action.VIEW",
                                 presetDataUri = link.fullUriTemplate,
                             )
                         )
-                    },
-                )
+                    }
+                }
             }
         }
 
-        // Raw manifest
-        item {
-            ExpandableCard("Raw AndroidManifest.xml") {
+        // Raw manifest, one lazy item per line: a single Text for a 300 KB manifest froze the screen
+        val manifestKey = "manifest"
+        val manifestOpen = expanded[manifestKey] == true
+        item(key = "h_$manifestKey", contentType = "header") {
+            SectionHeader("Raw AndroidManifest.xml (${manifestLines.size} lines)", manifestOpen) {
+                expanded[manifestKey] = !manifestOpen
+            }
+        }
+        if (manifestOpen) {
+            item(key = "manifest_copy") {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    IconButton(
-                        onClick = { clipboard.setText(AnnotatedString(report.rawManifestXml)) },
-                        modifier = Modifier.size(28.dp),
-                    ) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy manifest",
-                            modifier = Modifier.size(16.dp))
+                    TextButton(onClick = {
+                        runCatching { clipboard.setText(AnnotatedString(report.rawManifestXml)) }
+                    }) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Copy XML")
                     }
                 }
+            }
+            itemsIndexed(manifestLines, key = { i, _ -> "ml_$i" }, contentType = { _, _ -> "xml" }) { _, line ->
                 Text(
-                    text = report.rawManifestXml,
+                    text = line,
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                    modifier = Modifier.padding(top = 4.dp),
+                    modifier = Modifier.padding(horizontal = 8.dp),
                 )
             }
         }
@@ -502,107 +546,109 @@ private fun DeepAuditTab(report: AppDetailedReport, onComponentTap: (TesterTarge
 // ─── Component list ──────────────────────────────────────────────────────────
 
 @Composable
-private fun ComponentGroup(
-    title: String,
-    components: List<ComponentItem>,
-    onTap: (ComponentItem) -> Unit,
-) {
-    ExpandableCard(title = title) {
-        components.forEach { item ->
-            val isUnprotected = item.isUnprotectedExported
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
-                    .clickable { onTap(item) }
-                    .padding(vertical = 6.dp, horizontal = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    if (item.isExported) Icons.Default.LockOpen else Icons.Default.Lock,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp),
-                    tint = if (isUnprotected) RiskColors.Crimson
-                    else if (item.isExported) RiskColors.Amber
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.width(8.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        item.name.substringAfterLast('.'),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = if (item.isExported) FontWeight.SemiBold else FontWeight.Normal,
-                    )
-                    Text(
-                        item.name,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                if (isUnprotected) {
-                    Spacer(Modifier.width(6.dp))
-                    SmallBadge("UNPROTECTED", RiskColors.Crimson)
-                } else if (item.isExported) {
-                    Spacer(Modifier.width(6.dp))
-                    SmallBadge("EXPORTED", RiskColors.Amber)
-                }
-                Spacer(Modifier.width(6.dp))
-                Icon(
-                    Icons.AutoMirrored.Filled.OpenInNew,
-                    contentDescription = "Test",
-                    modifier = Modifier.size(14.dp),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
-            HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+private fun SectionHeader(title: String, expanded: Boolean, onToggle: () -> Unit) {
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onToggle)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            Icon(
+                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+            )
         }
     }
 }
 
 @Composable
-private fun DeepLinkGroup(
-    deepLinks: List<DeepLinkItem>,
-    packageName: String,
-    onTap: (DeepLinkItem) -> Unit,
-) {
-    ExpandableCard("Deep Links / URI Schemes (${deepLinks.size})") {
-        deepLinks.forEach { link ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
-                    .clickable { onTap(link) }
-                    .padding(vertical = 6.dp, horizontal = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(14.dp),
-                    tint = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(8.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        link.fullUriTemplate,
-                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        link.activityName.substringAfterLast('.'),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Spacer(Modifier.width(6.dp))
-                Icon(
-                    Icons.AutoMirrored.Filled.OpenInNew,
-                    contentDescription = "Test deep link",
-                    modifier = Modifier.size(14.dp),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
-            HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+private fun ComponentRow(item: ComponentItem, onTap: () -> Unit) {
+    val isUnprotected = item.isUnprotectedExported
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(onClick = onTap)
+            .padding(vertical = 6.dp, horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (item.isExported) Icons.Default.LockOpen else Icons.Default.Lock,
+            contentDescription = null,
+            modifier = Modifier.size(14.dp),
+            tint = if (isUnprotected) RiskColors.Crimson
+            else if (item.isExported) RiskColors.Amber
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                item.name.substringAfterLast('.'),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = if (item.isExported) FontWeight.SemiBold else FontWeight.Normal,
+            )
+            Text(
+                item.name,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
+        if (isUnprotected) {
+            Spacer(Modifier.width(6.dp))
+            SmallBadge("UNPROTECTED", RiskColors.Crimson)
+        } else if (item.isExported) {
+            Spacer(Modifier.width(6.dp))
+            SmallBadge("EXPORTED", RiskColors.Amber)
+        }
+        Spacer(Modifier.width(6.dp))
+        Icon(
+            Icons.AutoMirrored.Filled.OpenInNew,
+            contentDescription = "Test",
+            modifier = Modifier.size(14.dp),
+            tint = MaterialTheme.colorScheme.primary,
+        )
+    }
+}
+
+@Composable
+private fun DeepLinkRow(link: DeepLinkItem, onTap: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(onClick = onTap)
+            .padding(vertical = 6.dp, horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(14.dp),
+            tint = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                link.fullUriTemplate,
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                link.activityName.substringAfterLast('.'),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.width(6.dp))
+        Icon(
+            Icons.AutoMirrored.Filled.OpenInNew,
+            contentDescription = "Test deep link",
+            modifier = Modifier.size(14.dp),
+            tint = MaterialTheme.colorScheme.primary,
+        )
     }
 }
 

@@ -6,11 +6,17 @@ import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import com.charon.dexon.data.model.AppAuditSummary
 import com.charon.dexon.data.model.PrivacyGrade
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import java.io.File
 
 class PackageScanner(private val context: Context) {
 
     companion object {
+        private const val LABEL_THREADS = 6
+
         val HIGH_RISK_PERMISSIONS = setOf(
             "android.permission.READ_CONTACTS",
             "android.permission.RECORD_AUDIO",
@@ -32,7 +38,7 @@ class PackageScanner(private val context: Context) {
         }
     }
 
-    fun getInstalledSummaries(): List<AppAuditSummary> {
+    suspend fun getInstalledSummaries(): List<AppAuditSummary> = coroutineScope {
         val pm = context.packageManager
         val packages = runCatching {
             pm.getInstalledPackages(PackageManager.GET_PERMISSIONS or PackageManager.GET_ACTIVITIES)
@@ -41,7 +47,16 @@ class PackageScanner(private val context: Context) {
             pm.getInstalledPackages(PackageManager.GET_PERMISSIONS)
         }
 
-        return packages.mapNotNull { pkg -> runCatching { toSummary(pm, pkg) }.getOrNull() }
+        // Label loading opens each app's resources, the slowest part of the scan, so spread it across threads.
+        val chunkSize = (packages.size / LABEL_THREADS + 1).coerceAtLeast(1)
+        packages.chunked(chunkSize)
+            .map { chunk ->
+                async(Dispatchers.IO) {
+                    chunk.mapNotNull { pkg -> runCatching { toSummary(pm, pkg) }.getOrNull() }
+                }
+            }
+            .awaitAll()
+            .flatten()
             .sortedBy { it.appName.lowercase() }
     }
 

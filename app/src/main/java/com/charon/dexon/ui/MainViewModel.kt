@@ -3,6 +3,7 @@ package com.charon.dexon.ui
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
+import android.util.LruCache
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -21,6 +22,9 @@ import com.charon.dexon.domain.AdbCommandBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -32,6 +36,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 enum class AppFilter(val label: String) {
     ALL("All"),
@@ -107,6 +112,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _detail = MutableStateFlow<DetailState>(DetailState.Idle)
     val detail: StateFlow<DetailState> = _detail.asStateFlow()
     private var detailJob: Job? = null
+    private var detailPackage: String? = null
+    private var frameworkScanJob: Job? = null
+
+    /** Fully decoded reports, so revisiting an app skips the slow APK decode. */
+    private val reportCache = LruCache<String, AppDetailedReport>(REPORT_CACHE_SIZE)
 
     private val _bridge = MutableStateFlow(BridgeState())
     val bridge: StateFlow<BridgeState> = _bridge.asStateFlow()
@@ -127,6 +137,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refresh() {
+        reportCache.evictAll()
         viewModelScope.launch {
             _isLoading.value = true
             val summaries = withContext(Dispatchers.IO) { packageScanner.getInstalledSummaries() }
@@ -140,12 +151,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // User apps first: they are what people scroll to and filter on most.
         val pending = summaries.filter { it.packageName !in _frameworks.value }
             .sortedBy { it.isSystemApp }
-        pending.forEach { summary ->
-            viewModelScope.launch(zipScanDispatcher) {
-                val framework = TechStackDetector.scanApkZip(summary.apkPath).framework
-                _frameworks.update { it + (summary.packageName to framework) }
+        frameworkScanJob?.cancel()
+        frameworkScanJob = viewModelScope.launch {
+            // Results land in a buffer and reach the UI in batches; publishing each of the
+            // hundreds of results separately re-filtered and re-laid-out the list every time.
+            val buffer = ConcurrentHashMap<String, TechFramework>()
+            val flusher = launch {
+                while (isActive) {
+                    delay(FRAMEWORK_FLUSH_MS)
+                    flushFrameworks(buffer)
+                }
             }
+            pending.map { summary ->
+                launch(zipScanDispatcher) {
+                    buffer[summary.packageName] = TechStackDetector.scanApkZip(summary.apkPath).framework
+                }
+            }.joinAll()
+            flusher.cancel()
+            flushFrameworks(buffer)
         }
+    }
+
+    private fun flushFrameworks(buffer: ConcurrentHashMap<String, TechFramework>) {
+        if (buffer.isEmpty()) return
+        val batch = HashMap(buffer)
+        batch.keys.forEach(buffer::remove)
+        _frameworks.update { it + batch }
     }
 
     fun setQuery(value: String) { _query.value = value }
@@ -153,25 +184,39 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun consumeMessage() { _message.value = null }
 
     fun loadDetail(packageName: String) {
-        val current = _detail.value
-        if (current is DetailState.Ready && current.report.summary.packageName == packageName) return
+        if (packageName == detailPackage && _detail.value !is DetailState.Error) return
         detailJob?.cancel()
+        detailPackage = packageName
+        reportCache.get(packageName)?.let {
+            _detail.value = DetailState.Ready(it)
+            return
+        }
         _detail.value = DetailState.Loading
         detailJob = viewModelScope.launch {
-            _detail.value = withContext(Dispatchers.IO) {
+            // Phase 1: PackageManager data only, shown as soon as it is ready.
+            val quick = withContext(Dispatchers.IO) {
                 runCatching {
                     val summary = _apps.value.firstOrNull { it.packageName == packageName }
                         ?: packageScanner.getSummary(packageName)
                         ?: error("Package $packageName is not installed.")
-                    manifestParser.buildDetailedReport(summary)
-                }.fold(
-                    onSuccess = { report ->
-                        _frameworks.update { it + (packageName to report.summary.techFramework) }
-                        DetailState.Ready(report)
-                    },
-                    onFailure = { DetailState.Error(it.message ?: "Failed to audit $packageName") }
-                )
+                    manifestParser.buildQuickReport(summary, _frameworks.value[packageName])
+                }
+            }.getOrElse {
+                _detail.value = DetailState.Error(it.message ?: "Failed to audit $packageName")
+                return@launch
             }
+            _detail.value = DetailState.Ready(quick)
+
+            // Phase 2: decode the APK (manifest XML, deep links, signing, native libs).
+            val full = withContext(Dispatchers.IO) {
+                runCatching { manifestParser.completeReport(quick) }.getOrElse {
+                    quick.copy(signingSchemeSummary = "Could not decode APK: ${it.message}", isDeepScanComplete = true)
+                }
+            }
+            reportCache.put(packageName, full)
+            _frameworks.update { it + (packageName to full.summary.techFramework) }
+            if (_bridge.value.servingPackage == packageName) bridgeServer.activeReport = full
+            _detail.value = DetailState.Ready(full)
         }
     }
 
@@ -280,6 +325,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearTesterOutput() { _testerOutput.value = null }
+
+    private companion object {
+        const val FRAMEWORK_FLUSH_MS = 300L
+        const val REPORT_CACHE_SIZE = 8
+    }
 
     override fun onCleared() {
         bridgeServer.stopServer()

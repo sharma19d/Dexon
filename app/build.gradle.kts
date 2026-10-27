@@ -16,6 +16,17 @@ android {
         versionName = "1.0.0"
     }
 
+    buildTypes {
+        release {
+            // R8 + resource shrinking: Compose runs several times faster than in a debug build.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Signed with the local debug key so it installs directly; use a real keystore for Play.
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
     buildFeatures {
         compose = true
         aidl = true

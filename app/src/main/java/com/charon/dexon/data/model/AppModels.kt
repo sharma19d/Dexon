@@ -70,5 +70,7 @@ data class AppDetailedReport(
     val nativeLibraries: List<String>,
     val components: List<ComponentItem>,
     val deepLinks: List<DeepLinkItem>,
-    val rawManifestXml: String
+    val rawManifestXml: String,
+    /** False while the APK is still being decoded (native libs, deep links, signing, raw XML pending). */
+    val isDeepScanComplete: Boolean = true
 )
