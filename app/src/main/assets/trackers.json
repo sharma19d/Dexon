@@ -1,0 +1,22 @@
+[
+  { "name": "Google AdMob / Ads", "prefix": "com.google.android.gms.ads" },
+  { "name": "Google Firebase Analytics", "prefix": "com.google.firebase.analytics" },
+  { "name": "Meta / Facebook Analytics", "prefix": "com.facebook.appevents" },
+  { "name": "Meta Audience Network", "prefix": "com.facebook.ads" },
+  { "name": "AppsFlyer Attribution", "prefix": "com.appsflyer" },
+  { "name": "Adjust Tracker", "prefix": "com.adjust.sdk" },
+  { "name": "Branch.io DeepLink & Attribution", "prefix": "io.branch.referral" },
+  { "name": "Unity Ads", "prefix": "com.unity3d.services.ads" },
+  { "name": "AppLovin MAX", "prefix": "com.applovin" },
+  { "name": "IronSource Ads", "prefix": "com.ironsource.mediationsdk" },
+  { "name": "Mixpanel Analytics", "prefix": "com.mixpanel.android" },
+  { "name": "Amplitude Analytics", "prefix": "com.amplitude.api" },
+  { "name": "CleverTap Engagement", "prefix": "com.clevertap.android" },
+  { "name": "MoEngage Tracker", "prefix": "com.moengage" },
+  { "name": "OneSignal Push & Tracking", "prefix": "com.onesignal" },
+  { "name": "InMobi Ads", "prefix": "com.inmobi" },
+  { "name": "Vungle / Liftoff Ads", "prefix": "com.vungle.warren" },
+  { "name": "ByteDance / Pangle Ads", "prefix": "com.bytedance.sdk.openadsdk" },
+  { "name": "Flurry Analytics", "prefix": "com.flurry.android" },
+  { "name": "Braze / Appboy", "prefix": "com.braze" }
+]
