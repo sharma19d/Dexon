@@ -119,6 +119,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     val isRootAvailable: Boolean by lazy { dispatcher.isRootAvailable() }
 
+    /** Cheap binder ping; never requests permission, so it is safe to call while composing. */
+    fun isShizukuRunning(): Boolean = shizukuBridge.isRunning()
+
     init {
         refresh()
     }

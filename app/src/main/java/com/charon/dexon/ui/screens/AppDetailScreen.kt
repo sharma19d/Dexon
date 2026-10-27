@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
@@ -75,6 +76,7 @@ import com.charon.dexon.data.model.AppDetailedReport
 import com.charon.dexon.data.model.ComponentItem
 import com.charon.dexon.data.model.ComponentType
 import com.charon.dexon.data.model.DeepLinkItem
+import com.charon.dexon.data.model.PrivacyGrade
 import com.charon.dexon.ui.DetailState
 import com.charon.dexon.ui.MainViewModel
 import com.charon.dexon.ui.TesterTarget
@@ -91,6 +93,8 @@ fun AppDetailScreen(
     onBack: () -> Unit,
     onShare: () -> Unit,
     onSendToPc: () -> Unit,
+    onSave: () -> Unit,
+    onOpenScreen: (String) -> Unit,
     onLaunchStandard: (TesterTarget, String, String, Map<String, String>) -> Unit,
     onLaunchShizuku: (TesterTarget, String, String, Map<String, String>) -> Unit,
     onLaunchRoot: (TesterTarget, String, String, Map<String, String>) -> Unit,
@@ -100,7 +104,7 @@ fun AppDetailScreen(
     val snackbarHost = remember { SnackbarHostState() }
     var selectedTab by remember { mutableIntStateOf(0) }
     var testerTarget by remember { mutableStateOf<TesterTarget?>(null) }
-    val sheetState = rememberModalBottomSheetState()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
 
     Scaffold(
@@ -180,7 +184,7 @@ fun AppDetailScreen(
                         )
                     }
                     when (selectedTab) {
-                        0 -> OverviewTab(report, onShare, onSendToPc)
+                        0 -> OverviewTab(report, onShare, onSave, onSendToPc, onOpenScreen)
                         1 -> DeepAuditTab(
                             report = report,
                             onComponentTap = { target -> testerTarget = target },
@@ -213,7 +217,13 @@ fun AppDetailScreen(
 // ─── Tab 1: Overview ────────────────────────────────────────────────────────
 
 @Composable
-private fun OverviewTab(report: AppDetailedReport, onShare: () -> Unit, onSendToPc: () -> Unit) {
+private fun OverviewTab(
+    report: AppDetailedReport,
+    onShare: () -> Unit,
+    onSave: () -> Unit,
+    onSendToPc: () -> Unit,
+    onOpenScreen: (String) -> Unit,
+) {
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -301,6 +311,50 @@ private fun OverviewTab(report: AppDetailedReport, onShare: () -> Unit, onSendTo
             }
         }
 
+        // Hidden screen launcher: exported activities any app may open without a permission
+        val openableScreens = report.components.filter {
+            it.type == ComponentType.ACTIVITY && it.isUnprotectedExported
+        }
+        if (openableScreens.isNotEmpty()) {
+            item {
+                ExpandableCard("Openable Screens (${openableScreens.size})") {
+                    Text(
+                        "Screens this app lets other apps open directly, including ones not in its menus.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 6.dp),
+                    )
+                    openableScreens.forEach { screen ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { onOpenScreen(screen.name) }
+                                .padding(vertical = 8.dp, horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(screen.name.substringAfterLast('.'), style = MaterialTheme.typography.bodySmall)
+                                Text(
+                                    screen.name,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Icon(
+                                Icons.AutoMirrored.Filled.OpenInNew,
+                                contentDescription = "Open screen",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // Action buttons
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -308,6 +362,11 @@ private fun OverviewTab(report: AppDetailedReport, onShare: () -> Unit, onSendTo
                     Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("Share / Export APK")
+                }
+                FilledTonalButton(onClick = onSave, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Save APK to Storage")
                 }
                 FilledTonalButton(onClick = onSendToPc, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.Computer, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -638,13 +697,36 @@ private fun SecurityFlagRow(label: String, value: Boolean, dangerIfTrue: Boolean
     }
 }
 
+private val PERMISSION_PLAIN_ENGLISH = mapOf(
+    "android.permission.READ_CONTACTS" to "read your contacts",
+    "android.permission.RECORD_AUDIO" to "use your microphone",
+    "android.permission.CAMERA" to "use your camera",
+    "android.permission.ACCESS_FINE_LOCATION" to "see your precise location",
+    "android.permission.READ_SMS" to "read your SMS messages",
+    "android.permission.READ_CALL_LOG" to "read your call history",
+    "android.permission.SYSTEM_ALERT_WINDOW" to "draw over other apps",
+    "android.permission.READ_EXTERNAL_STORAGE" to "read your photos and files",
+    "android.permission.MANAGE_EXTERNAL_STORAGE" to "access all files on your phone"
+)
+
 private fun privacyGradeDescription(report: AppDetailedReport): String {
-    val issues = mutableListOf<String>()
-    if (report.isDebuggable) issues += "left in debug mode"
-    if (report.usesCleartextTraffic) issues += "allows plain HTTP"
-    if (report.allowBackup) issues += "allows ADB data backup"
-    if (report.dangerousPermissions.size >= 4) issues += "${report.dangerousPermissions.size} sensitive permissions"
-    if (report.detectedTrackers.isNotEmpty()) issues += "${report.detectedTrackers.size} trackers detected"
-    return if (issues.isEmpty()) "No critical issues found."
-    else "Issues: ${issues.joinToString(", ")}."
+    val sentences = mutableListOf<String>()
+    val abilities = report.dangerousPermissions.mapNotNull { PERMISSION_PLAIN_ENGLISH[it] }
+    if (abilities.isNotEmpty()) sentences += "This app can ${joinNaturally(abilities)}."
+    if (report.usesCleartextTraffic) sentences += "It is allowed to send data without encryption (plain HTTP)."
+    if (report.allowBackup) sentences += "Its private data can be copied out via ADB backup."
+    if (report.isDebuggable) sentences += "It was shipped in debug mode."
+    if (report.detectedTrackers.isNotEmpty()) {
+        val n = report.detectedTrackers.size
+        sentences += "It contains $n tracking or ad SDK${if (n == 1) "" else "s"}."
+    }
+    if (sentences.isEmpty()) return "No sensitive permissions or risky settings found."
+    val prefix = if (report.summary.privacyGrade >= PrivacyGrade.D) "Warning: " else ""
+    return prefix + sentences.joinToString(" ")
+}
+
+private fun joinNaturally(items: List<String>): String = when (items.size) {
+    1 -> items[0]
+    2 -> "${items[0]} and ${items[1]}"
+    else -> items.dropLast(1).joinToString(", ") + ", and " + items.last()
 }

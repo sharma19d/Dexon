@@ -2,6 +2,7 @@ package com.charon.dexon.ui.navigation
 
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.AlertDialog
@@ -14,12 +15,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.charon.dexon.data.model.AppAuditSummary
+import com.charon.dexon.ui.DetailState
 import com.charon.dexon.ui.MainViewModel
 import com.charon.dexon.ui.screens.AppDetailScreen
 import com.charon.dexon.ui.screens.HomeScreen
@@ -49,21 +53,20 @@ fun DexonNavHost(viewModel: MainViewModel) {
     ) { /* nothing to handle on return */ }
 
     // APK save-to-disk launcher
-    var pendingSavePackage by remember { mutableStateOf<String?>(null) }
+    var pendingSave by remember { mutableStateOf<AppAuditSummary?>(null) }
     val saveApkLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/vnd.android.package-archive")
     ) { uri: Uri? ->
-        val pkg = pendingSavePackage ?: return@rememberLauncherForActivityResult
-        pendingSavePackage = null
-        if (uri != null) {
-            val summary = apps.firstOrNull { it.packageName == pkg } ?: return@rememberLauncherForActivityResult
-            viewModel.saveApkTo(summary, uri)
-        }
+        val summary = pendingSave ?: return@rememberLauncherForActivityResult
+        pendingSave = null
+        if (uri != null) viewModel.saveApkTo(summary, uri)
     }
 
-    // Global snackbar for one-shot messages
-    if (message != null) {
-        LaunchedEffect(message) {
+    // One-shot status messages (export/save results, launch failures) shown on any screen
+    val context = LocalContext.current
+    LaunchedEffect(message) {
+        message?.let {
+            Toast.makeText(context, it, Toast.LENGTH_LONG).show()
             viewModel.consumeMessage()
         }
     }
@@ -99,15 +102,18 @@ fun DexonNavHost(viewModel: MainViewModel) {
             val packageName = URLDecoder.decode(
                 backStack.arguments?.getString("packageName") ?: "", "UTF-8"
             )
+            val readySummary = (detail as? DetailState.Ready)?.report?.summary
+            // Re-checked whenever the tester runs something, so starting Shizuku mid-session is picked up.
+            val shizukuRunning = remember(detail, testerOutput) { viewModel.isShizukuRunning() }
 
             AppDetailScreen(
                 state = detail,
                 testerOutput = testerOutput,
-                isShizukuAvailable = false, // Shizuku availability is checked at runtime inside the bridge
+                isShizukuAvailable = shizukuRunning,
                 isRootAvailable = viewModel.isRootAvailable,
                 onBack = { navController.popBackStack() },
                 onShare = {
-                    val summary = apps.firstOrNull { it.packageName == packageName } ?: return@AppDetailScreen
+                    val summary = readySummary ?: return@AppDetailScreen
                     scope.launch {
                         val intent = viewModel.buildShareApkIntent(summary)
                         if (intent != null) {
@@ -118,10 +124,16 @@ fun DexonNavHost(viewModel: MainViewModel) {
                     }
                 },
                 onSendToPc = {
-                    val rpt = (detail as? com.charon.dexon.ui.DetailState.Ready)?.report ?: return@AppDetailScreen
+                    val rpt = (detail as? DetailState.Ready)?.report ?: return@AppDetailScreen
                     viewModel.sendToPc(rpt)
                     showBridgeDialog = true
                 },
+                onSave = {
+                    val summary = readySummary ?: return@AppDetailScreen
+                    pendingSave = summary
+                    saveApkLauncher.launch("${summary.packageName}-${summary.versionName}.apk".replace('/', '_'))
+                },
+                onOpenScreen = { activity -> viewModel.launchScreen(packageName, activity) },
                 onLaunchStandard = { t, a, d, e -> viewModel.launchStandard(t, a, d, e) },
                 onLaunchShizuku = { t, a, d, e -> viewModel.launchViaShizuku(t, a, d, e) },
                 onLaunchRoot = { t, a, d, e -> viewModel.launchViaRoot(t, a, d, e) },

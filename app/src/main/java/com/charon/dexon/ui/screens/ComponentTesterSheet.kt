@@ -273,7 +273,8 @@ fun ComponentTesterSheet(
                 Text(if (target.type == ComponentType.PROVIDER) "Query Provider" else "Launch (Standard)")
             }
 
-            if (isShizukuAvailable) {
+            // Always offered; when Shizuku is not running the tap explains how to start it.
+            run {
                 Spacer(Modifier.height(8.dp))
                 FilledTonalButton(
                     onClick = { onLaunchShizuku(action, dataUri, extrasMap) },
@@ -281,7 +282,10 @@ fun ComponentTesterSheet(
                 ) {
                     Icon(Icons.Default.Terminal, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Run via Shizuku (ADB UID 2000)")
+                    Text(
+                        if (isShizukuAvailable) "Run via Shizuku (ADB UID 2000)"
+                        else "Run via Shizuku (not running)"
+                    )
                 }
             }
 
