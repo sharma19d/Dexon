@@ -1,0 +1,7 @@
+id: verified-boot
+title: Verified boot is green
+command: getprop ro.boot.verifiedbootstate
+match: green
+expected: true
+severity: MEDIUM
+description: An orange or yellow boot state indicates an unlocked bootloader or custom OS image.

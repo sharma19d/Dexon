@@ -1,0 +1,7 @@
+id: dev-settings
+title: Developer settings state
+command: settings get global development_settings_enabled
+match: ^1
+expected: false
+severity: INFO
+description: Reports whether Developer options are enabled on this device.

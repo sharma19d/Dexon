@@ -1,0 +1,7 @@
+id: selinux-enforcing
+title: SELinux is enforcing
+command: getenforce
+match: Enforcing
+expected: true
+severity: HIGH
+description: A device in permissive mode weakens app sandboxing. Enforcing is the healthy state.

@@ -1,0 +1,7 @@
+id: adb-tcp-open
+title: ADB over TCP is off
+command: getprop service.adb.tcp.port
+match: \d{2,}
+expected: false
+severity: MEDIUM
+description: A non-empty port means ADB is listening over the network, a remote attack surface.

@@ -1,0 +1,7 @@
+id: userdebug-build
+title: Production (user) build
+command: getprop ro.build.type
+match: ^user\s*$
+expected: true
+severity: LOW
+description: userdebug or eng builds expose extra debugging surfaces not present on shipping devices.
