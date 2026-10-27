@@ -15,6 +15,15 @@ import com.charon.dexon.data.scanner.ManifestDeepParser
 import com.charon.dexon.data.scanner.PackageScanner
 import com.charon.dexon.data.scanner.TechStackDetector
 import com.charon.dexon.data.scanner.TrackerScanner
+import com.charon.dexon.data.consent.AuthorizationManager
+import com.charon.dexon.data.model.DeepLinkMutation
+import com.charon.dexon.data.model.ProviderProbe
+import com.charon.dexon.data.model.ProviderReport
+import com.charon.dexon.data.model.SystemCheckResult
+import com.charon.dexon.data.pentest.BugReportBuilder
+import com.charon.dexon.data.pentest.DeepLinkMutator
+import com.charon.dexon.data.pentest.ProviderTester
+import com.charon.dexon.data.pentest.SystemCheckRunner
 import com.charon.dexon.data.server.WifiPcBridgeServer
 import com.charon.dexon.data.shizuku.IntentDispatcher
 import com.charon.dexon.data.shizuku.ShizukuBridge
@@ -57,6 +66,13 @@ sealed interface DetailState {
 
 data class BridgeState(val url: String? = null, val error: String? = null, val servingPackage: String? = null)
 
+sealed interface ProviderScanState {
+    data object Idle : ProviderScanState
+    data object Running : ProviderScanState
+    data class Done(val report: ProviderReport) : ProviderScanState
+    data class Error(val message: String) : ProviderScanState
+}
+
 /** Everything the Component Tester sheet needs to target one component or deep link. */
 data class TesterTarget(
     val packageName: String,
@@ -76,6 +92,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val shizukuBridge = ShizukuBridge(app)
     private val dispatcher = IntentDispatcher(app, shizukuBridge)
     private val bridgeServer = WifiPcBridgeServer(app)
+    private val authorization = AuthorizationManager(app)
+    private val providerTester = ProviderTester(app)
+    private val deepLinkMutator = DeepLinkMutator(app)
+    private val systemCheckRunner = SystemCheckRunner(app, shizukuBridge)
 
     private val zipScanDispatcher = Dispatchers.IO.limitedParallelism(4)
 
@@ -127,6 +147,108 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
+
+    // ---- Active testing (authorized-use gated) ----
+    val isAuthorized: Boolean get() = authorization.hasAccepted
+    fun acceptAuthorization() = authorization.accept()
+    fun revokeAuthorization() { authorization.revoke() }
+
+    private val _providerScan = MutableStateFlow<ProviderScanState>(ProviderScanState.Idle)
+    val providerScan: StateFlow<ProviderScanState> = _providerScan.asStateFlow()
+
+    private val _mutations = MutableStateFlow<List<DeepLinkMutation>>(emptyList())
+    val mutations: StateFlow<List<DeepLinkMutation>> = _mutations.asStateFlow()
+    private val _mutationsLoading = MutableStateFlow(false)
+    val mutationsLoading: StateFlow<Boolean> = _mutationsLoading.asStateFlow()
+
+    private val _systemChecks = MutableStateFlow<List<SystemCheckResult>>(emptyList())
+    val systemChecks: StateFlow<List<SystemCheckResult>> = _systemChecks.asStateFlow()
+    private val _checksRunning = MutableStateFlow(false)
+    val checksRunning: StateFlow<Boolean> = _checksRunning.asStateFlow()
+
+    fun scanProvider(target: TesterTarget) {
+        val authority = target.providerAuthority ?: run {
+            _message.value = "This provider declares no authority to test."
+            return
+        }
+        _providerScan.value = ProviderScanState.Running
+        viewModelScope.launch {
+            val report = runCatching { providerTester.test(authority, target.componentName) }
+            _providerScan.value = report.fold(
+                { ProviderScanState.Done(it) },
+                { ProviderScanState.Error(it.message ?: "Scan failed") },
+            )
+        }
+    }
+
+    fun clearProviderScan() { _providerScan.value = ProviderScanState.Idle }
+
+    fun mutateDeepLink(templateUri: String, targetPackage: String) {
+        if (templateUri.isBlank()) return
+        _mutationsLoading.value = true
+        viewModelScope.launch {
+            _mutations.value = runCatching { deepLinkMutator.mutate(templateUri, targetPackage) }.getOrDefault(emptyList())
+            _mutationsLoading.value = false
+        }
+    }
+
+    fun clearMutations() { _mutations.value = emptyList() }
+
+    fun loadSystemChecksIfEmpty() {
+        if (_systemChecks.value.isNotEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val checks = systemCheckRunner.loadChecks()
+            _systemChecks.value = checks.map { SystemCheckResult(it, passed = null, matched = false, rawOutput = "") }
+        }
+    }
+
+    fun runAllChecks() {
+        if (_checksRunning.value) return
+        _checksRunning.value = true
+        viewModelScope.launch {
+            val current = _systemChecks.value.ifEmpty {
+                withContext(Dispatchers.IO) { systemCheckRunner.loadChecks() }
+                    .map { SystemCheckResult(it, null, false, "") }
+            }
+            val results = current.map { withContext(Dispatchers.IO) { systemCheckRunner.run(it.check) } }
+            _systemChecks.value = results
+            _checksRunning.value = false
+        }
+    }
+
+    /** Markdown bug report for the selected component, or null if no detail report is loaded. */
+    fun bugReportForComponent(target: TesterTarget): String? {
+        val report = (_detail.value as? DetailState.Ready)?.report ?: return null
+        val component = report.components.firstOrNull { it.name == target.componentName } ?: return null
+        return BugReportBuilder.forExportedComponent(report, component).toMarkdown()
+    }
+
+    /** Markdown bug report for one provider probe finding. */
+    fun bugReportForProvider(target: TesterTarget, provider: ProviderReport, probe: ProviderProbe): String {
+        val report = (_detail.value as? DetailState.Ready)?.report
+        return if (report != null) {
+            BugReportBuilder.forProviderFinding(report, provider, probe).toMarkdown()
+        } else {
+            "# ${probe.payloadLabel}\n\n`${probe.uri}`\n\n${probe.detail}\n"
+        }
+    }
+
+    /** Builds a Markdown report and returns a share intent, or sets a message on failure. */
+    suspend fun buildBugReportShare(markdown: String, fileName: String): Intent? = withContext(Dispatchers.IO) {
+        runCatching {
+            val app = getApplication<Application>()
+            val dir = File(app.cacheDir, "reports").apply { mkdirs() }
+            val out = File(dir, fileName.replace(Regex("[^A-Za-z0-9._-]"), "_"))
+            out.writeText(markdown)
+            val uri = FileProvider.getUriForFile(app, "${app.packageName}.fileprovider", out)
+            Intent(Intent.ACTION_SEND).apply {
+                type = "text/markdown"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_TEXT, markdown)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        }.onFailure { _message.value = "Report failed: ${it.message}" }.getOrNull()
+    }
 
     val isRootAvailable: Boolean by lazy { dispatcher.isRootAvailable() }
 

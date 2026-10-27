@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.*
@@ -52,6 +53,7 @@ fun HomeScreen(
     onQueryChange: (String) -> Unit,
     onFilterChange: (AppFilter) -> Unit,
     onBridgeClick: () -> Unit,
+    onSystemChecks: () -> Unit,
     onRefresh: () -> Unit,
     onAppClick: (AppAuditSummary) -> Unit
 ) {
@@ -60,6 +62,9 @@ fun HomeScreen(
             TopAppBar(
                 title = { Text("Dexon", fontWeight = FontWeight.Bold) },
                 actions = {
+                    IconButton(onClick = onSystemChecks) {
+                        Icon(Icons.Default.Security, contentDescription = "System checks")
+                    }
                     IconButton(onClick = onRefresh) {
                         Icon(Icons.Default.Refresh, contentDescription = "Rescan apps")
                     }

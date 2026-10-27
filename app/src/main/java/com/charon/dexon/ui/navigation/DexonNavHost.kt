@@ -26,7 +26,11 @@ import com.charon.dexon.data.model.AppAuditSummary
 import com.charon.dexon.ui.DetailState
 import com.charon.dexon.ui.MainViewModel
 import com.charon.dexon.ui.screens.AppDetailScreen
+import com.charon.dexon.ui.TesterTarget
+import com.charon.dexon.ui.screens.ActiveTestingSheet
+import com.charon.dexon.ui.screens.AuthorizationDialog
 import com.charon.dexon.ui.screens.HomeScreen
+import com.charon.dexon.ui.screens.SystemChecksScreen
 import kotlinx.coroutines.launch
 import java.net.URLDecoder
 import java.net.URLEncoder
@@ -46,6 +50,13 @@ fun DexonNavHost(viewModel: MainViewModel) {
     val message by viewModel.message.collectAsStateWithLifecycle()
 
     var showBridgeDialog by remember { mutableStateOf(false) }
+    var activeTarget by remember { mutableStateOf<TesterTarget?>(null) }
+    var pendingGatedAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+
+    // Runs [action] if the authorized-use agreement is accepted, otherwise prompts for it first.
+    fun gated(action: () -> Unit) {
+        if (viewModel.isAuthorized) action() else pendingGatedAction = action
+    }
 
     // APK share launcher
     val shareApkLauncher = rememberLauncherForActivityResult(
@@ -86,6 +97,7 @@ fun DexonNavHost(viewModel: MainViewModel) {
                     if (bridge.url == null) viewModel.toggleBridge()
                     showBridgeDialog = true
                 },
+                onSystemChecks = { gated { navController.navigate("checks") } },
                 onRefresh = viewModel::refresh,
                 onAppClick = { summary ->
                     viewModel.loadDetail(summary.packageName)
@@ -132,6 +144,7 @@ fun DexonNavHost(viewModel: MainViewModel) {
                     saveApkLauncher.launch("${summary.packageName}-${summary.versionName}.apk".replace('/', '_'))
                 },
                 onOpenScreen = { activity -> viewModel.launchScreen(packageName, activity) },
+                onActiveTest = { target -> gated { activeTarget = target } },
                 onLaunchStandard = { t, a, d, e -> viewModel.launchStandard(t, a, d, e) },
                 onLaunchShizuku = { t, a, d, e -> viewModel.launchViaShizuku(t, a, d, e) },
                 onLaunchRoot = { t, a, d, e -> viewModel.launchViaRoot(t, a, d, e) },
@@ -139,8 +152,35 @@ fun DexonNavHost(viewModel: MainViewModel) {
                 onClearTesterOutput = viewModel::clearTesterOutput,
             )
         }
+
+        composable("checks") {
+            SystemChecksScreen(viewModel = viewModel, onBack = { navController.popBackStack() })
+        }
     }
 
+    // Authorized-use gate
+    if (pendingGatedAction != null) {
+        AuthorizationDialog(
+            onAccept = {
+                viewModel.acceptAuthorization()
+                val action = pendingGatedAction
+                pendingGatedAction = null
+                action?.invoke()
+            },
+            onDecline = { pendingGatedAction = null },
+        )
+    }
+
+    // Active testing sheet
+    activeTarget?.let { target ->
+        ActiveTestingSheet(
+            viewModel = viewModel,
+            target = target,
+            onDismiss = { activeTarget = null },
+        )
+    }
+
+    // System checks route
     // Wi-Fi PC Bridge dialog
     if (showBridgeDialog) {
         AlertDialog(

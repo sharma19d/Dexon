@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
@@ -102,6 +103,7 @@ fun AppDetailScreen(
     onSendToPc: () -> Unit,
     onSave: () -> Unit,
     onOpenScreen: (String) -> Unit,
+    onActiveTest: (TesterTarget) -> Unit,
     onLaunchStandard: (TesterTarget, String, String, Map<String, String>) -> Unit,
     onLaunchShizuku: (TesterTarget, String, String, Map<String, String>) -> Unit,
     onLaunchRoot: (TesterTarget, String, String, Map<String, String>) -> Unit,
@@ -195,6 +197,7 @@ fun AppDetailScreen(
                         1 -> DeepAuditTab(
                             report = report,
                             onComponentTap = { target -> testerTarget = target },
+                            onActiveTest = onActiveTest,
                         )
                     }
                 }
@@ -390,7 +393,11 @@ private fun OverviewTab(
 // ─── Tab 2: Deep Audit ──────────────────────────────────────────────────────
 
 @Composable
-private fun DeepAuditTab(report: AppDetailedReport, onComponentTap: (TesterTarget) -> Unit) {
+private fun DeepAuditTab(
+    report: AppDetailedReport,
+    onComponentTap: (TesterTarget) -> Unit,
+    onActiveTest: (TesterTarget) -> Unit,
+) {
     val clipboard = LocalClipboardManager.current
     val expanded = remember(report.summary.packageName) { mutableStateMapOf<String, Boolean>() }
     val manifestLines = remember(report.rawManifestXml) {
@@ -462,16 +469,17 @@ private fun DeepAuditTab(report: AppDetailedReport, onComponentTap: (TesterTarge
             }
             if (open) {
                 items(list, key = { "c_${type}_${it.name}" }, contentType = { "component" }) { item ->
-                    ComponentRow(item) {
-                        onComponentTap(
-                            TesterTarget(
-                                packageName = report.summary.packageName,
-                                componentName = item.name,
-                                type = item.type,
-                                providerAuthority = item.authority,
-                            )
-                        )
-                    }
+                    val tt = TesterTarget(
+                        packageName = report.summary.packageName,
+                        componentName = item.name,
+                        type = item.type,
+                        providerAuthority = item.authority,
+                    )
+                    ComponentRow(
+                        item = item,
+                        onTap = { onComponentTap(tt) },
+                        onActiveTest = if (item.type == ComponentType.PROVIDER) ({ onActiveTest(tt) }) else null,
+                    )
                 }
             }
         }
@@ -498,17 +506,14 @@ private fun DeepAuditTab(report: AppDetailedReport, onComponentTap: (TesterTarge
             }
             if (open) {
                 itemsIndexed(report.deepLinks, key = { i, _ -> "dl_$i" }, contentType = { _, _ -> "deeplink" }) { _, link ->
-                    DeepLinkRow(link) {
-                        onComponentTap(
-                            TesterTarget(
-                                packageName = report.summary.packageName,
-                                componentName = link.activityName,
-                                type = ComponentType.ACTIVITY,
-                                presetAction = "android.intent.action.VIEW",
-                                presetDataUri = link.fullUriTemplate,
-                            )
-                        )
-                    }
+                    val tt = TesterTarget(
+                        packageName = report.summary.packageName,
+                        componentName = link.activityName,
+                        type = ComponentType.ACTIVITY,
+                        presetAction = "android.intent.action.VIEW",
+                        presetDataUri = link.fullUriTemplate,
+                    )
+                    DeepLinkRow(link, onTap = { onComponentTap(tt) }, onActiveTest = { onActiveTest(tt) })
                 }
             }
         }
@@ -567,7 +572,7 @@ private fun SectionHeader(title: String, expanded: Boolean, onToggle: () -> Unit
 }
 
 @Composable
-private fun ComponentRow(item: ComponentItem, onTap: () -> Unit) {
+private fun ComponentRow(item: ComponentItem, onTap: () -> Unit, onActiveTest: (() -> Unit)? = null) {
     val isUnprotected = item.isUnprotectedExported
     Row(
         modifier = Modifier
@@ -607,6 +612,12 @@ private fun ComponentRow(item: ComponentItem, onTap: () -> Unit) {
             Spacer(Modifier.width(6.dp))
             SmallBadge("EXPORTED", RiskColors.Amber)
         }
+        if (onActiveTest != null) {
+            IconButton(onClick = onActiveTest, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Default.Security, contentDescription = "Active test",
+                    modifier = Modifier.size(16.dp), tint = RiskColors.Amber)
+            }
+        }
         Spacer(Modifier.width(6.dp))
         Icon(
             Icons.AutoMirrored.Filled.OpenInNew,
@@ -618,7 +629,7 @@ private fun ComponentRow(item: ComponentItem, onTap: () -> Unit) {
 }
 
 @Composable
-private fun DeepLinkRow(link: DeepLinkItem, onTap: () -> Unit) {
+private fun DeepLinkRow(link: DeepLinkItem, onTap: () -> Unit, onActiveTest: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -643,7 +654,10 @@ private fun DeepLinkRow(link: DeepLinkItem, onTap: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Spacer(Modifier.width(6.dp))
+        IconButton(onClick = onActiveTest, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Default.Security, contentDescription = "Mutate & test",
+                modifier = Modifier.size(16.dp), tint = RiskColors.Amber)
+        }
         Icon(
             Icons.AutoMirrored.Filled.OpenInNew,
             contentDescription = "Test deep link",
