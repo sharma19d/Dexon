@@ -16,6 +16,8 @@ import com.charon.dexon.data.scanner.PackageScanner
 import com.charon.dexon.data.scanner.TechStackDetector
 import com.charon.dexon.data.scanner.TrackerScanner
 import com.charon.dexon.data.consent.AuthorizationManager
+import com.charon.dexon.data.model.AppConnections
+import com.charon.dexon.data.net.ConnectionMonitor
 import com.charon.dexon.data.model.DeepLinkMutation
 import com.charon.dexon.data.model.ProviderProbe
 import com.charon.dexon.data.model.ProviderReport
@@ -96,6 +98,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val providerTester = ProviderTester(app)
     private val deepLinkMutator = DeepLinkMutator(app)
     private val systemCheckRunner = SystemCheckRunner(app, shizukuBridge)
+    private val connectionMonitor = ConnectionMonitor(app, shizukuBridge)
 
     private val zipScanDispatcher = Dispatchers.IO.limitedParallelism(4)
 
@@ -230,6 +233,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             BugReportBuilder.forProviderFinding(report, provider, probe).toMarkdown()
         } else {
             "# ${probe.payloadLabel}\n\n`${probe.uri}`\n\n${probe.detail}\n"
+        }
+    }
+
+    // ---- Live connections ----
+    private val _connections = MutableStateFlow<List<AppConnections>>(emptyList())
+    val connections: StateFlow<List<AppConnections>> = _connections.asStateFlow()
+    private val _connectionsError = MutableStateFlow<String?>(null)
+    val connectionsError: StateFlow<String?> = _connectionsError.asStateFlow()
+
+    fun refreshConnections() {
+        viewModelScope.launch {
+            val snap = connectionMonitor.snapshot()
+            snap.fold(
+                onSuccess = { list ->
+                    _connectionsError.value = null
+                    _connections.value = connectionMonitor.group(list)
+                },
+                onFailure = { _connectionsError.value = it.message ?: "Needs Shizuku to read connections." },
+            )
         }
     }
 

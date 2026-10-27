@@ -49,11 +49,8 @@ fun HomeScreen(
     isLoading: Boolean,
     query: String,
     filter: AppFilter,
-    bridgeActive: Boolean,
     onQueryChange: (String) -> Unit,
     onFilterChange: (AppFilter) -> Unit,
-    onBridgeClick: () -> Unit,
-    onSystemChecks: () -> Unit,
     onRefresh: () -> Unit,
     onAppClick: (AppAuditSummary) -> Unit
 ) {
@@ -62,18 +59,8 @@ fun HomeScreen(
             TopAppBar(
                 title = { Text("Dexon", fontWeight = FontWeight.Bold) },
                 actions = {
-                    IconButton(onClick = onSystemChecks) {
-                        Icon(Icons.Default.Security, contentDescription = "System checks")
-                    }
                     IconButton(onClick = onRefresh) {
                         Icon(Icons.Default.Refresh, contentDescription = "Rescan apps")
-                    }
-                    IconButton(onClick = onBridgeClick) {
-                        Icon(
-                            if (bridgeActive) Icons.Default.Wifi else Icons.Default.WifiOff,
-                            contentDescription = "Wi-Fi PC Bridge",
-                            tint = if (bridgeActive) RiskColors.Emerald else LocalContentColor.current
-                        )
                     }
                 }
             )

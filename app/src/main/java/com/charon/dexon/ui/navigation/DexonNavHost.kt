@@ -5,7 +5,16 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -15,30 +24,47 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavDestination.Companion.hierarchy
+import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.charon.dexon.BuildConfig
 import com.charon.dexon.data.model.AppAuditSummary
+import com.charon.dexon.data.shizuku.ShizukuStatus
 import com.charon.dexon.ui.DetailState
 import com.charon.dexon.ui.MainViewModel
-import com.charon.dexon.ui.screens.AppDetailScreen
 import com.charon.dexon.ui.TesterTarget
 import com.charon.dexon.ui.screens.ActiveTestingSheet
+import com.charon.dexon.ui.screens.AppDetailScreen
 import com.charon.dexon.ui.screens.AuthorizationDialog
 import com.charon.dexon.ui.screens.HomeScreen
+import com.charon.dexon.ui.screens.LiveConnectionsScreen
+import com.charon.dexon.ui.screens.SettingsScreen
 import com.charon.dexon.ui.screens.SystemChecksScreen
+import com.charon.dexon.ui.screens.ToolsScreen
 import kotlinx.coroutines.launch
 import java.net.URLDecoder
 import java.net.URLEncoder
+
+private enum class BottomTab(val route: String, val label: String, val icon: ImageVector) {
+    APPS("apps", "Apps", Icons.AutoMirrored.Filled.List),
+    TOOLS("tools", "Tools", Icons.Default.Build),
+    SETTINGS("settings", "Settings", Icons.Default.Settings),
+}
 
 @Composable
 fun DexonNavHost(viewModel: MainViewModel) {
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     val apps by viewModel.visibleApps.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
@@ -58,12 +84,10 @@ fun DexonNavHost(viewModel: MainViewModel) {
         if (viewModel.isAuthorized) action() else pendingGatedAction = action
     }
 
-    // APK share launcher
     val shareApkLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { /* nothing to handle on return */ }
 
-    // APK save-to-disk launcher
     var pendingSave by remember { mutableStateOf<AppAuditSummary?>(null) }
     val saveApkLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/vnd.android.package-archive")
@@ -73,8 +97,6 @@ fun DexonNavHost(viewModel: MainViewModel) {
         if (uri != null) viewModel.saveApkTo(summary, uri)
     }
 
-    // One-shot status messages (export/save results, launch failures) shown on any screen
-    val context = LocalContext.current
     LaunchedEffect(message) {
         message?.let {
             Toast.makeText(context, it, Toast.LENGTH_LONG).show()
@@ -82,79 +104,130 @@ fun DexonNavHost(viewModel: MainViewModel) {
         }
     }
 
-    NavHost(navController, startDestination = "home") {
+    // Bottom bar shows only on the three top-level destinations.
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = backStackEntry?.destination?.route
+    val showBottomBar = currentRoute in BottomTab.entries.map { it.route }
 
-        composable("home") {
-            HomeScreen(
-                apps = apps,
-                isLoading = isLoading,
-                query = query,
-                filter = filter,
-                bridgeActive = bridge.url != null,
-                onQueryChange = viewModel::setQuery,
-                onFilterChange = viewModel::setFilter,
-                onBridgeClick = {
-                    if (bridge.url == null) viewModel.toggleBridge()
-                    showBridgeDialog = true
-                },
-                onSystemChecks = { gated { navController.navigate("checks") } },
-                onRefresh = viewModel::refresh,
-                onAppClick = { summary ->
-                    viewModel.loadDetail(summary.packageName)
-                    val encoded = URLEncoder.encode(summary.packageName, "UTF-8")
-                    navController.navigate("detail/$encoded")
-                },
-            )
-        }
-
-        composable(
-            route = "detail/{packageName}",
-            arguments = listOf(navArgument("packageName") { type = NavType.StringType }),
-        ) { backStack ->
-            val packageName = URLDecoder.decode(
-                backStack.arguments?.getString("packageName") ?: "", "UTF-8"
-            )
-            val readySummary = (detail as? DetailState.Ready)?.report?.summary
-
-            AppDetailScreen(
-                state = detail,
-                testerOutput = testerOutput,
-                shizukuStatusProvider = viewModel::shizukuStatus,
-                isRootAvailable = viewModel.isRootAvailable,
-                onBack = { navController.popBackStack() },
-                onShare = {
-                    val summary = readySummary ?: return@AppDetailScreen
-                    scope.launch {
-                        val intent = viewModel.buildShareApkIntent(summary)
-                        if (intent != null) {
-                            shareApkLauncher.launch(
-                                Intent.createChooser(intent, "Share APK — ${summary.appName}")
-                            )
-                        }
+    Scaffold(
+        bottomBar = {
+            if (showBottomBar) {
+                NavigationBar {
+                    BottomTab.entries.forEach { tab ->
+                        val selected = backStackEntry?.destination?.hierarchy?.any { it.route == tab.route } == true
+                        NavigationBarItem(
+                            selected = selected,
+                            onClick = {
+                                navController.navigate(tab.route) {
+                                    popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            },
+                            icon = { Icon(tab.icon, contentDescription = tab.label) },
+                            label = { Text(tab.label) },
+                        )
                     }
-                },
-                onSendToPc = {
-                    val rpt = (detail as? DetailState.Ready)?.report ?: return@AppDetailScreen
-                    viewModel.sendToPc(rpt)
-                    showBridgeDialog = true
-                },
-                onSave = {
-                    val summary = readySummary ?: return@AppDetailScreen
-                    pendingSave = summary
-                    saveApkLauncher.launch("${summary.packageName}-${summary.versionName}.apk".replace('/', '_'))
-                },
-                onOpenScreen = { activity -> viewModel.launchScreen(packageName, activity) },
-                onActiveTest = { target -> gated { activeTarget = target } },
-                onLaunchStandard = { t, a, d, e -> viewModel.launchStandard(t, a, d, e) },
-                onLaunchShizuku = { t, a, d, e -> viewModel.launchViaShizuku(t, a, d, e) },
-                onLaunchRoot = { t, a, d, e -> viewModel.launchViaRoot(t, a, d, e) },
-                onBuildAdbCommand = { t, a, d, e -> viewModel.buildAdbCommand(t, a, d, e) },
-                onClearTesterOutput = viewModel::clearTesterOutput,
-            )
-        }
+                }
+            }
+        },
+    ) { scaffoldPadding ->
+        NavHost(
+            navController = navController,
+            startDestination = BottomTab.APPS.route,
+            modifier = Modifier.padding(scaffoldPadding),
+        ) {
 
-        composable("checks") {
-            SystemChecksScreen(viewModel = viewModel, onBack = { navController.popBackStack() })
+            composable(BottomTab.APPS.route) {
+                HomeScreen(
+                    apps = apps,
+                    isLoading = isLoading,
+                    query = query,
+                    filter = filter,
+                    onQueryChange = viewModel::setQuery,
+                    onFilterChange = viewModel::setFilter,
+                    onRefresh = viewModel::refresh,
+                    onAppClick = { summary ->
+                        viewModel.loadDetail(summary.packageName)
+                        navController.navigate("detail/${URLEncoder.encode(summary.packageName, "UTF-8")}")
+                    },
+                )
+            }
+
+            composable(BottomTab.TOOLS.route) {
+                ToolsScreen(
+                    bridgeUrl = bridge.url,
+                    onSystemChecks = { gated { navController.navigate("checks") } },
+                    onLiveConnections = { gated { navController.navigate("connections") } },
+                    onToggleBridge = {
+                        if (bridge.url == null) viewModel.toggleBridge()
+                        showBridgeDialog = true
+                    },
+                )
+            }
+
+            composable(BottomTab.SETTINGS.route) {
+                SettingsScreen(
+                    isAuthorized = viewModel.isAuthorized,
+                    shizukuRunning = viewModel.shizukuStatus().let {
+                        it == ShizukuStatus.READY || it == ShizukuStatus.NEEDS_PERMISSION
+                    },
+                    versionName = BuildConfig.VERSION_NAME,
+                    onRevokeAuthorization = { viewModel.revokeAuthorization() },
+                )
+            }
+
+            composable(
+                route = "detail/{packageName}",
+                arguments = listOf(navArgument("packageName") { type = NavType.StringType }),
+            ) { backStack ->
+                val packageName = URLDecoder.decode(
+                    backStack.arguments?.getString("packageName") ?: "", "UTF-8"
+                )
+                val readySummary = (detail as? DetailState.Ready)?.report?.summary
+
+                AppDetailScreen(
+                    state = detail,
+                    testerOutput = testerOutput,
+                    shizukuStatusProvider = viewModel::shizukuStatus,
+                    isRootAvailable = viewModel.isRootAvailable,
+                    onBack = { navController.popBackStack() },
+                    onShare = {
+                        val summary = readySummary ?: return@AppDetailScreen
+                        scope.launch {
+                            val intent = viewModel.buildShareApkIntent(summary)
+                            if (intent != null) {
+                                shareApkLauncher.launch(Intent.createChooser(intent, "Share APK — ${summary.appName}"))
+                            }
+                        }
+                    },
+                    onSendToPc = {
+                        val rpt = (detail as? DetailState.Ready)?.report ?: return@AppDetailScreen
+                        viewModel.sendToPc(rpt)
+                        showBridgeDialog = true
+                    },
+                    onSave = {
+                        val summary = readySummary ?: return@AppDetailScreen
+                        pendingSave = summary
+                        saveApkLauncher.launch("${summary.packageName}-${summary.versionName}.apk".replace('/', '_'))
+                    },
+                    onOpenScreen = { activity -> viewModel.launchScreen(packageName, activity) },
+                    onActiveTest = { target -> gated { activeTarget = target } },
+                    onLaunchStandard = { t, a, d, e -> viewModel.launchStandard(t, a, d, e) },
+                    onLaunchShizuku = { t, a, d, e -> viewModel.launchViaShizuku(t, a, d, e) },
+                    onLaunchRoot = { t, a, d, e -> viewModel.launchViaRoot(t, a, d, e) },
+                    onBuildAdbCommand = { t, a, d, e -> viewModel.buildAdbCommand(t, a, d, e) },
+                    onClearTesterOutput = viewModel::clearTesterOutput,
+                )
+            }
+
+            composable("checks") {
+                SystemChecksScreen(viewModel = viewModel, onBack = { navController.popBackStack() })
+            }
+
+            composable("connections") {
+                LiveConnectionsScreen(viewModel = viewModel, onBack = { navController.popBackStack() })
+            }
         }
     }
 
@@ -173,14 +246,9 @@ fun DexonNavHost(viewModel: MainViewModel) {
 
     // Active testing sheet
     activeTarget?.let { target ->
-        ActiveTestingSheet(
-            viewModel = viewModel,
-            target = target,
-            onDismiss = { activeTarget = null },
-        )
+        ActiveTestingSheet(viewModel = viewModel, target = target, onDismiss = { activeTarget = null })
     }
 
-    // System checks route
     // Wi-Fi PC Bridge dialog
     if (showBridgeDialog) {
         AlertDialog(
@@ -199,13 +267,9 @@ fun DexonNavHost(viewModel: MainViewModel) {
                         ?: "Starting server…"
                 )
             },
-            confirmButton = {
-                TextButton(onClick = { showBridgeDialog = false }) { Text("Close") }
-            },
+            confirmButton = { TextButton(onClick = { showBridgeDialog = false }) { Text("Close") } },
             dismissButton = {
-                TextButton(onClick = { viewModel.stopBridge(); showBridgeDialog = false }) {
-                    Text("Stop Server")
-                }
+                TextButton(onClick = { viewModel.stopBridge(); showBridgeDialog = false }) { Text("Stop Server") }
             },
         )
     }
