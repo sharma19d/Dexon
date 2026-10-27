@@ -103,13 +103,11 @@ fun DexonNavHost(viewModel: MainViewModel) {
                 backStack.arguments?.getString("packageName") ?: "", "UTF-8"
             )
             val readySummary = (detail as? DetailState.Ready)?.report?.summary
-            // Re-checked whenever the tester runs something, so starting Shizuku mid-session is picked up.
-            val shizukuRunning = remember(detail, testerOutput) { viewModel.isShizukuRunning() }
 
             AppDetailScreen(
                 state = detail,
                 testerOutput = testerOutput,
-                isShizukuAvailable = shizukuRunning,
+                shizukuStatusProvider = viewModel::shizukuStatus,
                 isRootAvailable = viewModel.isRootAvailable,
                 onBack = { navController.popBackStack() },
                 onShare = {

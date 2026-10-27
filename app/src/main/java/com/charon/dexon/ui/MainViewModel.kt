@@ -18,6 +18,7 @@ import com.charon.dexon.data.scanner.TrackerScanner
 import com.charon.dexon.data.server.WifiPcBridgeServer
 import com.charon.dexon.data.shizuku.IntentDispatcher
 import com.charon.dexon.data.shizuku.ShizukuBridge
+import com.charon.dexon.data.shizuku.ShizukuStatus
 import com.charon.dexon.domain.AdbCommandBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -129,8 +130,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     val isRootAvailable: Boolean by lazy { dispatcher.isRootAvailable() }
 
-    /** Cheap binder ping; never requests permission, so it is safe to call while composing. */
-    fun isShizukuRunning(): Boolean = shizukuBridge.isRunning()
+    /** Cheap binder ping plus package lookup; never requests permission or prompts the user. */
+    fun shizukuStatus(): ShizukuStatus = shizukuBridge.status()
 
     init {
         refresh()

@@ -14,6 +14,9 @@ import kotlinx.coroutines.withTimeout
 import rikka.shizuku.Shizuku
 import kotlin.coroutines.resume
 
+/** Where the user is in Shizuku setup, in the order the steps must be done. */
+enum class ShizukuStatus { NOT_INSTALLED, NOT_RUNNING, NEEDS_PERMISSION, READY }
+
 /**
  * Optional Tier 2 bridge. Nothing here runs until the user explicitly taps a Shizuku action,
  * so the app never prompts for Shizuku on launch.
@@ -36,6 +39,18 @@ class ShizukuBridge(context: Context) {
     private var connection: ServiceConnection? = null
 
     fun isRunning(): Boolean = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
+
+    fun isInstalled(): Boolean = runCatching {
+        @Suppress("DEPRECATION")
+        appContext.packageManager.getPackageInfo(SHIZUKU_PACKAGE, 0)
+    }.isSuccess
+
+    /** Checked running-first: Sui (root) provides the Shizuku API without the manager app installed. */
+    fun status(): ShizukuStatus = when {
+        isRunning() -> if (hasPermission()) ShizukuStatus.READY else ShizukuStatus.NEEDS_PERMISSION
+        isInstalled() -> ShizukuStatus.NOT_RUNNING
+        else -> ShizukuStatus.NOT_INSTALLED
+    }
 
     fun hasPermission(): Boolean = runCatching {
         !Shizuku.isPreV11() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
@@ -88,7 +103,8 @@ class ShizukuBridge(context: Context) {
         service = null
     }
 
-    private companion object {
-        const val REQUEST_CODE = 0xDE
+    companion object {
+        const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
+        private const val REQUEST_CODE = 0xDE
     }
 }

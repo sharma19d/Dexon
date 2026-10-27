@@ -79,6 +79,7 @@ import com.charon.dexon.data.model.ComponentItem
 import com.charon.dexon.data.model.ComponentType
 import com.charon.dexon.data.model.DeepLinkItem
 import com.charon.dexon.data.model.PrivacyGrade
+import com.charon.dexon.data.shizuku.ShizukuStatus
 import com.charon.dexon.ui.DetailState
 import com.charon.dexon.ui.MainViewModel
 import com.charon.dexon.ui.TesterTarget
@@ -94,7 +95,7 @@ import kotlinx.coroutines.launch
 fun AppDetailScreen(
     state: DetailState,
     testerOutput: String?,
-    isShizukuAvailable: Boolean,
+    shizukuStatusProvider: () -> ShizukuStatus,
     isRootAvailable: Boolean,
     onBack: () -> Unit,
     onShare: () -> Unit,
@@ -202,7 +203,7 @@ fun AppDetailScreen(
                     ComponentTesterSheet(
                         target = target,
                         testerOutput = testerOutput,
-                        isShizukuAvailable = isShizukuAvailable,
+                        shizukuStatusProvider = shizukuStatusProvider,
                         isRootAvailable = isRootAvailable,
                         sheetState = sheetState,
                         onDismiss = {

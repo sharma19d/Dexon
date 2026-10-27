@@ -56,7 +56,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import com.charon.dexon.data.model.ComponentType
+import com.charon.dexon.data.shizuku.ShizukuStatus
 import com.charon.dexon.ui.TesterTarget
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -64,7 +67,7 @@ import com.charon.dexon.ui.TesterTarget
 fun ComponentTesterSheet(
     target: TesterTarget,
     testerOutput: String?,
-    isShizukuAvailable: Boolean,
+    shizukuStatusProvider: () -> ShizukuStatus,
     isRootAvailable: Boolean,
     sheetState: SheetState = rememberModalBottomSheetState(),
     onDismiss: () -> Unit,
@@ -78,6 +81,9 @@ fun ComponentTesterSheet(
     var dataUri by remember { mutableStateOf(target.presetDataUri) }
     val extras = remember { mutableStateListOf<Pair<String, String>>() }
     val clipboard = LocalClipboardManager.current
+    var shizukuStatus by remember { mutableStateOf(shizukuStatusProvider()) }
+    var showShizukuSetup by remember { mutableStateOf(false) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { shizukuStatus = shizukuStatusProvider() }
 
     val adbCommand = remember(action, dataUri, extras.toList()) {
         onBuildAdbCommand(action, dataUri, extras.associate { it })
@@ -273,20 +279,46 @@ fun ComponentTesterSheet(
                 Text(if (target.type == ComponentType.PROVIDER) "Query Provider" else "Launch (Standard)")
             }
 
-            // Always offered; when Shizuku is not running the tap explains how to start it.
+            // Always offered; if Shizuku is not ready the tap opens the setup guide instead.
             run {
                 Spacer(Modifier.height(8.dp))
                 FilledTonalButton(
-                    onClick = { onLaunchShizuku(action, dataUri, extrasMap) },
+                    onClick = {
+                        shizukuStatus = shizukuStatusProvider()
+                        when (shizukuStatus) {
+                            ShizukuStatus.READY, ShizukuStatus.NEEDS_PERMISSION ->
+                                onLaunchShizuku(action, dataUri, extrasMap)
+                            else -> showShizukuSetup = true
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.Default.Terminal, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        if (isShizukuAvailable) "Run via Shizuku (ADB UID 2000)"
-                        else "Run via Shizuku (not running)"
+                        when (shizukuStatus) {
+                            ShizukuStatus.READY -> "Run via Shizuku (ADB UID 2000)"
+                            ShizukuStatus.NEEDS_PERMISSION -> "Run via Shizuku (allow access)"
+                            ShizukuStatus.NOT_RUNNING -> "Run via Shizuku (start Shizuku)"
+                            ShizukuStatus.NOT_INSTALLED -> "Run via Shizuku (set up)"
+                        }
                     )
                 }
+            }
+
+            if (showShizukuSetup) {
+                ShizukuSetupDialog(
+                    statusProvider = shizukuStatusProvider,
+                    onDismiss = {
+                        showShizukuSetup = false
+                        shizukuStatus = shizukuStatusProvider()
+                    },
+                    onReady = {
+                        showShizukuSetup = false
+                        shizukuStatus = shizukuStatusProvider()
+                        onLaunchShizuku(action, dataUri, extrasMap)
+                    },
+                )
             }
 
             if (isRootAvailable) {
